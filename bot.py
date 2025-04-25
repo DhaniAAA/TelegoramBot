@@ -54,8 +54,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Get and summarize latest news from NewsAPI."""
     try:
+        if not NEWS_API_KEY:
+            logging.error("NEWS_API_KEY tidak ditemukan dalam environment variables")
+            await update.message.reply_text('Mohon maaf, konfigurasi API berita belum lengkap.')
+            return
+
         global news_cache
         current_time = datetime.now()
+        logging.info("Memulai pengambilan berita terkini")
 
         if news_cache['timestamp'] and current_time - news_cache['timestamp'] < CACHE_DURATION:
             articles = news_cache['data']
@@ -66,7 +72,9 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'apiKey': NEWS_API_KEY,
                 'pageSize': 5
             }
-            response = requests.get(url, params=params)
+            logging.info(f"Mengambil berita dari {url}")
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()  # Raise exception untuk status code selain 200
             news_data = response.json()
             articles = []
 
@@ -99,9 +107,15 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(news_text)
         else:
             await update.message.reply_text('Mohon maaf, tidak ada berita yang dapat diambil saat ini.')
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error saat melakukan request ke NewsAPI: {str(e)}")
+        await update.message.reply_text('Mohon maaf, terjadi masalah koneksi saat mengambil berita.')
+    except json.JSONDecodeError as e:
+        logging.error(f"Error saat memproses response JSON: {str(e)}")
+        await update.message.reply_text('Mohon maaf, terjadi kesalahan format data saat mengambil berita.')
     except Exception as e:
-        logging.error(f"Error fetching news: {str(e)}")
-        await update.message.reply_text('Mohon maaf, terjadi kesalahan saat mengambil berita.')
+        logging.error(f"Error tidak terduga saat mengambil berita: {str(e)}")
+        await update.message.reply_text('Mohon maaf, terjadi kesalahan yang tidak terduga saat mengambil berita.')
 
 async def get_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Get weather information from OpenWeatherMap."""
