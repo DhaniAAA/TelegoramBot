@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
+from bs4 import BeautifulSoup
 
 # Load environment variables
 load_dotenv()
@@ -28,58 +29,92 @@ WEATHER_API_KEY = os.getenv('WEATHER_API_KEY')
 # Cache for API responses
 news_cache = {'timestamp': None, 'data': None}
 weather_cache = {'timestamp': None, 'data': None}
+cnn_cache = {'timestamp': None, 'data': None}
 
 CACHE_DURATION = timedelta(minutes=15)
 
 # Bot personality and response instructions
-BOT_PERSONALITY = """Anda adalah kekasih yang setia, selalu mendengarkan curhatan pasanganya dan mendengar yang baik juga bisa memberikan saran dan motivasi. penuh hormat."""
-RESPONSE_INSTRUCTION = "Respon anda harus lembut dan sopan."
+BOT_PERSONALITY = """Saya adalah asisten AI yang profesional dan ramah, siap membantu Anda dengan berbagai informasi dan layanan. Saya akan memberikan respon yang informatif dan bermanfaat."""
+RESPONSE_INSTRUCTION = "Respon harus profesional, informatif, dan tetap ramah."
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
-    await update.message.reply_text('Halo sayang! Saya di sini untuk mendengarkan dan mendukungmu. Saya akan selalu ada untukmu, memberikan saran dan motivasi dengan penuh kasih sayang. Silakan berbagi apa yang ada di hatimu ♥️')
+    await update.message.reply_text('Halo! Saya adalah asisten AI yang siap membantu Anda. Saya dapat memberikan informasi, saran, dan bantuan sesuai kebutuhan Anda. Silakan ajukan pertanyaan atau gunakan perintah yang tersedia.')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /help is issued."""
     help_text = (
-        'Sayang, kamu bisa berbagi apapun denganku. Aku akan selalu mendengarkan dan memberikan dukungan terbaik untukmu ❤️\n\n'
+        'Selamat datang! Saya siap membantu Anda dengan layanan berikut:\n\n'
         'Perintah yang tersedia:\n'
         '/berita - Mendapatkan berita terbaru\n'
-        '/cuaca [kota] - Cek cuaca di kotamu'
+        '/cuaca [kota] - Cek cuaca di kota yang Anda inginkan'
     )
     await update.message.reply_text(help_text)
 
 async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get latest news from NewsAPI."""
+    """Get and summarize latest news from CNN Indonesia."""
     try:
-        global news_cache
+        global cnn_cache
         current_time = datetime.now()
 
-        if news_cache['timestamp'] and current_time - news_cache['timestamp'] < CACHE_DURATION:
-            news_data = news_cache['data']
+        if cnn_cache['timestamp'] and current_time - cnn_cache['timestamp'] < CACHE_DURATION:
+            articles = cnn_cache['data']
         else:
-            url = f'https://newsapi.org/v2/top-headlines?country=id&apiKey={NEWS_API_KEY}'
+            url = 'https://www.cnnindonesia.com/'
             response = requests.get(url)
-            news_data = response.json()
-            news_cache = {'timestamp': current_time, 'data': news_data}
+            soup = BeautifulSoup(response.text, 'lxml')
+            articles = []
 
-        if news_data['status'] == 'ok' and news_data['articles']:
-            news_text = '📰 Berita Terkini Untukmu Sayang:\n\n'
-            for i, article in enumerate(news_data['articles'][:5], 1):
+            # Get articles from main section
+            main_articles = soup.select('article.text-gray-800')
+            for article in main_articles[:5]:  # Limit to 5 articles
+                title_elem = article.select_one('h2')
+                if title_elem:
+                    title = title_elem.text.strip()
+                    link = article.find('a')['href'] if article.find('a') else ''
+                    
+                    # Get article content
+                    if link:
+                        article_response = requests.get(link)
+                        article_soup = BeautifulSoup(article_response.text, 'lxml')
+                        content_elem = article_soup.select_one('div.detail-text')
+                        content = content_elem.get_text(strip=True) if content_elem else ''
+                        
+                        # Generate summary using Gemini AI
+                        prompt = f"Buatkan ringkasan singkat dan informatif (maksimal 3 kalimat) dari berita berikut:\n\n{content}"
+                        summary_response = model.generate_content(prompt)
+                        summary = summary_response.text if summary_response else ''
+                    else:
+                        content = ''
+                        summary = ''
+                    
+                    articles.append({
+                        'title': title,
+                        'link': link,
+                        'summary': summary
+                    })
+
+            cnn_cache = {'timestamp': current_time, 'data': articles}
+
+        if articles:
+            news_text = '📰 Berita Terkini dari CNN Indonesia:\n\n'
+            for i, article in enumerate(articles, 1):
                 news_text += f"{i}. {article['title']}\n"
-                news_text += f"   {article['description'] or 'Tidak ada deskripsi'}\n\n"
+                if article['summary']:
+                    news_text += f"   Ringkasan: {article['summary']}\n"
+                news_text += f"   Sumber: {article['link']}\n\n"
             await update.message.reply_text(news_text)
         else:
-            await update.message.reply_text('Maaf sayang, ada masalah dalam mengambil berita terkini 😔')
+            await update.message.reply_text('Mohon maaf, tidak ada berita yang dapat diambil saat ini.')
     except Exception as e:
-        logging.error(f"Error fetching news: {str(e)}")
-        await update.message.reply_text('Maaf sayang, ada kesalahan saat mengambil berita 😔')
+        logging.error(f"Error fetching CNN news: {str(e)}")
+        await update.message.reply_text('Mohon maaf, terjadi kesalahan saat mengambil berita dari CNN Indonesia.')
 
 async def get_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Get weather information from OpenWeatherMap."""
     try:
         if not context.args:
-            await update.message.reply_text('Sayang, tolong berikan nama kota ya? Contoh: /cuaca Jakarta')
+            await update.message.reply_text('Silakan berikan nama kota. Contoh: /cuaca Jakarta')
             return
 
         city = ' '.join(context.args)
@@ -99,10 +134,10 @@ async def get_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await update.message.reply_text(weather_text)
         else:
-            await update.message.reply_text('Maaf sayang, kota yang kamu cari tidak ditemukan 😔')
+            await update.message.reply_text('Mohon maaf, kota yang Anda cari tidak ditemukan.')
     except Exception as e:
         logging.error(f"Error fetching weather: {str(e)}")
-        await update.message.reply_text('Maaf sayang, ada kesalahan saat mengecek cuaca 😔')
+        await update.message.reply_text('Mohon maaf, terjadi kesalahan saat mengecek cuaca.')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages and respond using Gemini AI."""
@@ -111,7 +146,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_message = update.message.text
 
         # Prepare message with personality and instructions
-        prompt = f"{BOT_PERSONALITY}\n{RESPONSE_INSTRUCTION}\n\nPesan dari pasangan: {user_message}\n\nBerikan respon:"
+        prompt = f"{BOT_PERSONALITY}\n{RESPONSE_INSTRUCTION}\n\nPesan dari pengguna: {user_message}\n\nBerikan respon:"
 
         # Generate response using Gemini AI
         response = model.generate_content(prompt)
@@ -120,7 +155,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response.text)
     except Exception as e:
         logging.error(f"Error processing message: {str(e)}")
-        await update.message.reply_text('Maaf, terjadi kesalahan dalam memproses pesan Anda. Silakan coba lagi.')
+        await update.message.reply_text('Mohon maaf, terjadi kesalahan dalam memproses pesan Anda. Silakan coba lagi.')
 
 def main():
     """Start the bot with proper shutdown handling and instance management."""
