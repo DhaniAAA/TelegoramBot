@@ -73,9 +73,17 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'pageSize': 5
             }
             logging.info(f"Mengambil berita dari {url}")
+            logging.info("Mengirim request ke NewsAPI...")
             response = requests.get(url, params=params, timeout=10)
+            logging.info(f"Status code response: {response.status_code}")
             response.raise_for_status()  # Raise exception untuk status code selain 200
             news_data = response.json()
+            logging.info(f"Jumlah artikel yang diterima: {len(news_data.get('articles', []))}")
+            if news_data.get('status') != 'ok':
+                logging.error(f"Status response bukan 'ok': {news_data.get('status')}")
+                if 'message' in news_data:
+                    logging.error(f"Pesan error dari API: {news_data.get('message')}")
+                raise Exception("Status response dari NewsAPI tidak valid")
             articles = []
 
             if news_data['status'] == 'ok':
