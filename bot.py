@@ -52,7 +52,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text)
 
 async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get and summarize latest news from NewsAPI."""
+    """Get and summarize latest news from GNews.io."""
     try:
         if not NEWS_API_KEY:
             logging.error("NEWS_API_KEY tidak ditemukan dalam environment variables")
@@ -66,14 +66,15 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if news_cache['timestamp'] and current_time - news_cache['timestamp'] < CACHE_DURATION:
             articles = news_cache['data']
         else:
-            url = 'https://newsapi.org/v2/top-headlines'
+            url = 'https://gnews.io/api/v4/top-headlines'
             params = {
+                'lang': 'id',
                 'country': 'id',
-                'apiKey': NEWS_API_KEY,
-                'pageSize': 5
+                'token': NEWS_API_KEY,
+                'max': 5
             }
             logging.info(f"Mengambil berita dari {url}")
-            logging.info("Mengirim request ke NewsAPI...")
+            logging.info("Mengirim request ke GNews...")
             response = requests.get(url, params=params, timeout=10)
             logging.info(f"Status code response: {response.status_code}")
             response.raise_for_status()  # Raise exception untuk status code selain 200
@@ -86,37 +87,40 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 raise Exception("Status response dari NewsAPI tidak valid")
             articles = []
 
-            if news_data['status'] == 'ok':
-                for article in news_data['articles']:
-                    # Generate summary using Gemini AI if content is available
-                    content = article.get('description', '') or article.get('content', '')
-                    if content:
-                        prompt = f"Buatkan ringkasan singkat dan informatif (maksimal 3 kalimat) dari berita berikut:\n\n{content}"
-                        summary_response = model.generate_content(prompt)
-                        summary = summary_response.text if summary_response else ''
-                    else:
-                        summary = ''
+            articles = []
+            for article in news_data.get('articles', []):
+                # Generate summary using Gemini AI if content is available
+                content = article.get('description', '')
+                if content:
+                    prompt = f"Buatkan ringkasan singkat dan informatif (maksimal 3 kalimat) dari berita berikut:\n\n{content}"
+                    summary_response = model.generate_content(prompt)
+                    summary = summary_response.text if summary_response else ''
+                else:
+                    summary = ''
 
-                    articles.append({
-                        'title': article.get('title', ''),
-                        'link': article.get('url', ''),
-                        'summary': summary
-                    })
+                articles.append({
+                    'title': article.get('title', ''),
+                    'link': article.get('url', ''),
+                    'summary': summary,
+                    'source': article.get('source', {}).get('name', '')
+                })
 
-                news_cache = {'timestamp': current_time, 'data': articles}
+            news_cache = {'timestamp': current_time, 'data': articles}
 
         if articles:
             news_text = '📰 Berita Terkini Indonesia:\n\n'
             for i, article in enumerate(articles, 1):
                 news_text += f"{i}. {article['title']}\n"
+                if article['source']:
+                    news_text += f"   Sumber: {article['source']}\n"
                 if article['summary']:
                     news_text += f"   Ringkasan: {article['summary']}\n"
-                news_text += f"   Sumber: {article['link']}\n\n"
+                news_text += f"   Link: {article['link']}\n\n"
             await update.message.reply_text(news_text)
         else:
             await update.message.reply_text('Mohon maaf, tidak ada berita yang dapat diambil saat ini.')
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error saat melakukan request ke NewsAPI: {str(e)}")
+        logging.error(f"Error saat melakukan request ke GNews: {str(e)}")
         await update.message.reply_text('Mohon maaf, terjadi masalah koneksi saat mengambil berita.')
     except json.JSONDecodeError as e:
         logging.error(f"Error saat memproses response JSON: {str(e)}")
