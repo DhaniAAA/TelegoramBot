@@ -7,203 +7,178 @@ from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
-from bs4 import BeautifulSoup
 
-# Load environment variables
+# Load .env variables
 load_dotenv()
 
-# Configure logging
+# Logging configuration
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-# Initialize Gemini AI and other API keys
-genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-model = genai.GenerativeModel('gemini-2.0-flash')
-
-# API Keys
+# API Key configurations
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 NEWS_API_KEY = os.getenv('NEWS_API_KEY')
 WEATHER_API_KEY = os.getenv('WEATHER_API_KEY')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
-# Cache for API responses
+# Gemini model configuration
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
+
+# Caching
 news_cache = {'timestamp': None, 'data': None}
 weather_cache = {'timestamp': None, 'data': None}
-cnn_cache = {'timestamp': None, 'data': None}
-
 CACHE_DURATION = timedelta(minutes=15)
 
-# Bot personality and response instructions
-BOT_PERSONALITY = """Saya adalah asisten AI yang profesional dan ramah, siap membantu Anda dengan berbagai informasi dan layanan. Saya akan memberikan respon yang informatif dan bermanfaat."""
-RESPONSE_INSTRUCTION = "Respon harus profesional, informatif, dan tetap ramah."
+# Personality prompt
+BOT_PERSONALITY = """Saya adalah asisten AI yang profesional dan ramah, siap membantu Anda dengan berbagai informasi dan layanan."""
+RESPONSE_INSTRUCTION = "Jawaban harus informatif, sopan, dan mudah dipahami."
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a message when the command /start is issued."""
-    await update.message.reply_text('Halo! Saya adalah asisten AI yang siap membantu Anda. Saya dapat memberikan informasi, saran, dan bantuan sesuai kebutuhan Anda. Silakan ajukan pertanyaan atau gunakan perintah yang tersedia.')
+    await update.message.reply_text(
+        'Halo! Saya adalah asisten AI yang siap membantu Anda.\n'
+        'Gunakan perintah seperti /berita untuk melihat berita terkini atau /cuaca [nama kota].'
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a message when the command /help is issued."""
-    help_text = (
-        'Selamat datang! Saya siap membantu Anda dengan layanan berikut:\n\n'
-        'Perintah yang tersedia:\n'
-        '/berita - Mendapatkan berita terbaru\n'
-        '/cuaca [kota] - Cek cuaca di kota yang Anda inginkan'
+    await update.message.reply_text(
+        '/berita - Tampilkan berita terbaru\n'
+        '/cuaca [kota] - Tampilkan info cuaca\n'
+        'Ketik pesan apa saja untuk berdiskusi dengan AI.'
     )
-    await update.message.reply_text(help_text)
 
 async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get and summarize latest news from GNews.io."""
     try:
         if not NEWS_API_KEY:
-            logging.error("NEWS_API_KEY tidak ditemukan dalam environment variables")
-            await update.message.reply_text('Mohon maaf, konfigurasi API berita belum lengkap.')
+            await update.message.reply_text("Konfigurasi API berita belum tersedia.")
             return
 
-        global news_cache
         current_time = datetime.now()
-        logging.info("Memulai pengambilan berita terkini")
+        global news_cache
 
         if news_cache['timestamp'] and current_time - news_cache['timestamp'] < CACHE_DURATION:
             articles = news_cache['data']
         else:
             url = 'https://gnews.io/api/v4/top-headlines'
             params = {
+                'token': NEWS_API_KEY,
                 'lang': 'id',
                 'country': 'id',
-                'token': NEWS_API_KEY,
                 'max': 5
             }
-            logging.info(f"Mengambil berita dari {url}")
-            logging.info("Mengirim request ke GNews...")
-            response = requests.get(url, params=params, timeout=10)
-            logging.info(f"Status code response: {response.status_code}")
-            response.raise_for_status()  # Raise exception untuk status code selain 200
+            response = requests.get(url, params=params)
+            response.raise_for_status()
             news_data = response.json()
-            logging.info(f"Jumlah artikel yang diterima: {len(news_data.get('articles', []))}")
-            if news_data.get('status') != 'ok':
-                logging.error(f"Status response bukan 'ok': {news_data.get('status')}")
-                if 'message' in news_data:
-                    logging.error(f"Pesan error dari API: {news_data.get('message')}")
-                raise Exception("Status response dari NewsAPI tidak valid")
-            articles = []
+
+            raw_articles = news_data.get('articles', [])
+            if not raw_articles:
+                await update.message.reply_text("Tidak ada berita yang tersedia saat ini.")
+                return
 
             articles = []
-            for article in news_data.get('articles', []):
-                # Generate summary using Gemini AI if content is available
-                content = article.get('description', '')
-                if content:
-                    prompt = f"Buatkan ringkasan singkat dan informatif (maksimal 3 kalimat) dari berita berikut:\n\n{content}"
-                    summary_response = model.generate_content(prompt)
-                    summary = summary_response.text if summary_response else ''
-                else:
-                    summary = ''
+            for article in raw_articles:
+                title = article.get('title', '')
+                description = article.get('description', '')
+                link = article.get('url', '')
+                source = article.get('source', {}).get('name', '')
+
+                summary = ""
+                if description:
+                    try:
+                        prompt = f"Buatkan ringkasan singkat (maks 3 kalimat) dari berita berikut:\n\n{description}"
+                        summary_result = model.generate_content(prompt)
+                        summary = summary_result.text.strip()
+                    except Exception as e:
+                        logging.warning(f"Gagal merangkum dengan Gemini: {str(e)}")
+                        summary = description if len(description) <= 200 else description[:200] + "..."
 
                 articles.append({
-                    'title': article.get('title', ''),
-                    'link': article.get('url', ''),
+                    'title': title,
+                    'link': link,
                     'summary': summary,
-                    'source': article.get('source', {}).get('name', '')
+                    'source': source
                 })
 
             news_cache = {'timestamp': current_time, 'data': articles}
 
         if articles:
-            news_text = '📰 Berita Terkini Indonesia:\n\n'
-            for i, article in enumerate(articles, 1):
-                news_text += f"{i}. {article['title']}\n"
+            response_text = "📰 *Berita Terkini:*\n\n"
+            for i, article in enumerate(articles, start=1):
+                response_text += f"{i}. *{article['title']}*\n"
                 if article['source']:
-                    news_text += f"   Sumber: {article['source']}\n"
+                    response_text += f"   Sumber: {article['source']}\n"
                 if article['summary']:
-                    news_text += f"   Ringkasan: {article['summary']}\n"
-                news_text += f"   Link: {article['link']}\n\n"
-            await update.message.reply_text(news_text)
+                    response_text += f"   Ringkasan: {article['summary']}\n"
+                response_text += f"   Link: {article['link']}\n\n"
+            await update.message.reply_text(response_text, parse_mode='Markdown')
         else:
-            await update.message.reply_text('Mohon maaf, tidak ada berita yang dapat diambil saat ini.')
+            await update.message.reply_text("Tidak ada berita yang dapat ditampilkan.")
+
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error saat melakukan request ke GNews: {str(e)}")
-        await update.message.reply_text('Mohon maaf, terjadi masalah koneksi saat mengambil berita.')
-    except json.JSONDecodeError as e:
-        logging.error(f"Error saat memproses response JSON: {str(e)}")
-        await update.message.reply_text('Mohon maaf, terjadi kesalahan format data saat mengambil berita.')
+        logging.error(f"Error request GNews: {str(e)}")
+        await update.message.reply_text("Gagal terhubung ke layanan berita.")
     except Exception as e:
-        logging.error(f"Error tidak terduga saat mengambil berita: {str(e)}")
-        await update.message.reply_text('Mohon maaf, terjadi kesalahan yang tidak terduga saat mengambil berita.')
+        logging.error(f"Unexpected error: {str(e)}")
+        await update.message.reply_text("Terjadi kesalahan saat mengambil berita.")
 
 async def get_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get weather information from OpenWeatherMap."""
     try:
         if not context.args:
-            await update.message.reply_text('Silakan berikan nama kota. Contoh: /cuaca Jakarta')
+            await update.message.reply_text('Format: /cuaca [nama kota]')
             return
 
         city = ' '.join(context.args)
         url = f'http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric&lang=id'
         response = requests.get(url)
-        weather_data = response.json()
+        data = response.json()
 
         if response.status_code == 200:
-            temp = weather_data['main']['temp']
-            weather_desc = weather_data['weather'][0]['description']
-            humidity = weather_data['main']['humidity']
-
-            weather_text = f'🌤️ Cuaca di {city} saat ini:\n\n'
-            weather_text += f'Suhu: {temp}°C\n'
-            weather_text += f'Kondisi: {weather_desc}\n'
-            weather_text += f'Kelembaban: {humidity}%'
-
-            await update.message.reply_text(weather_text)
+            temp = data['main']['temp']
+            desc = data['weather'][0]['description']
+            humidity = data['main']['humidity']
+            reply = (
+                f"🌤️ Cuaca di {city} saat ini:\n"
+                f"Suhu: {temp}°C\n"
+                f"Kondisi: {desc}\n"
+                f"Kelembaban: {humidity}%"
+            )
+            await update.message.reply_text(reply)
         else:
-            await update.message.reply_text('Mohon maaf, kota yang Anda cari tidak ditemukan.')
+            await update.message.reply_text("Kota tidak ditemukan.")
+
     except Exception as e:
-        logging.error(f"Error fetching weather: {str(e)}")
-        await update.message.reply_text('Mohon maaf, terjadi kesalahan saat mengecek cuaca.')
+        logging.error(f"Error cuaca: {str(e)}")
+        await update.message.reply_text("Terjadi kesalahan saat mengambil data cuaca.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle incoming messages and respond using Gemini AI."""
     try:
-        # Get user message
-        user_message = update.message.text
-
-        # Prepare message with personality and instructions
-        prompt = f"{BOT_PERSONALITY}\n{RESPONSE_INSTRUCTION}\n\nPesan dari pengguna: {user_message}\n\nBerikan respon:"
-
-        # Generate response using Gemini AI
-        response = model.generate_content(prompt)
-
-        # Send response back to user
-        await update.message.reply_text(response.text)
+        user_input = update.message.text
+        prompt = f"{BOT_PERSONALITY}\n{RESPONSE_INSTRUCTION}\n\nPengguna: {user_input}\n\nBalasan:"
+        result = model.generate_content(prompt)
+        await update.message.reply_text(result.text)
     except Exception as e:
-        logging.error(f"Error processing message: {str(e)}")
-        await update.message.reply_text('Mohon maaf, terjadi kesalahan dalam memproses pesan Anda. Silakan coba lagi.')
+        logging.error(f"Error AI: {str(e)}")
+        await update.message.reply_text("Terjadi kesalahan saat memproses pesan Anda.")
 
 def main():
-    """Start the bot with proper shutdown handling and instance management."""
     try:
-        # Create application with proper shutdown handling
-        application = (
-            Application.builder()
-            .token(os.getenv('TELEGRAM_TOKEN'))
-            .concurrent_updates(False)  # Disable concurrent updates to prevent conflicts
-            .build()
-        )
+        if not TELEGRAM_TOKEN:
+            raise ValueError("TELEGRAM_TOKEN tidak ditemukan di environment.")
 
-        # Add handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("berita", get_news))
-        application.add_handler(CommandHandler("cuaca", get_weather))
+        app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("help", help_command))
+        app.add_handler(CommandHandler("berita", get_news))
+        app.add_handler(CommandHandler("cuaca", get_weather))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-        # Start the bot with proper shutdown handling
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,  # Ignore updates that arrived while the bot was offline
-            close_loop=True  # Properly close the event loop on shutdown
-        )
+        app.run_polling()
+
     except Exception as e:
-        logging.error(f"Error running bot: {str(e)}")
-        raise
+        logging.error(f"Startup error: {str(e)}")
 
 if __name__ == '__main__':
     main()
