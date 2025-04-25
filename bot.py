@@ -66,20 +66,21 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
             articles = []
 
             # Get articles from main section
-            main_articles = soup.select('article.text-gray-800')
+            main_articles = soup.select('article')
             for article in main_articles[:5]:  # Limit to 5 articles
-                title_elem = article.select_one('h2')
+                title_elem = article.select_one('h2, h3')
                 if title_elem:
                     title = title_elem.text.strip()
-                    link = article.find('a')['href'] if article.find('a') else ''
-                    
+                    link_elem = article.find('a')
+                    link = link_elem['href'] if link_elem and 'href' in link_elem.attrs else ''
+
                     # Get article content
                     if link:
                         article_response = requests.get(link)
                         article_soup = BeautifulSoup(article_response.text, 'lxml')
                         content_elem = article_soup.select_one('div.detail-text')
                         content = content_elem.get_text(strip=True) if content_elem else ''
-                        
+
                         # Generate summary using Gemini AI
                         prompt = f"Buatkan ringkasan singkat dan informatif (maksimal 3 kalimat) dari berita berikut:\n\n{content}"
                         summary_response = model.generate_content(prompt)
@@ -87,7 +88,7 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         content = ''
                         summary = ''
-                    
+
                     articles.append({
                         'title': title,
                         'link': link,
