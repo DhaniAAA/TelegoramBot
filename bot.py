@@ -52,53 +52,45 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text)
 
 async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get and summarize latest news from CNN Indonesia."""
+    """Get and summarize latest news from NewsAPI."""
     try:
-        global cnn_cache
+        global news_cache
         current_time = datetime.now()
 
-        if cnn_cache['timestamp'] and current_time - cnn_cache['timestamp'] < CACHE_DURATION:
-            articles = cnn_cache['data']
+        if news_cache['timestamp'] and current_time - news_cache['timestamp'] < CACHE_DURATION:
+            articles = news_cache['data']
         else:
-            url = 'https://www.cnnindonesia.com/'
-            response = requests.get(url)
-            soup = BeautifulSoup(response.text, 'lxml')
+            url = 'https://newsapi.org/v2/top-headlines'
+            params = {
+                'country': 'id',
+                'apiKey': NEWS_API_KEY,
+                'pageSize': 5
+            }
+            response = requests.get(url, params=params)
+            news_data = response.json()
             articles = []
 
-            # Get articles from main section
-            main_articles = soup.select('article')
-            for article in main_articles[:5]:  # Limit to 5 articles
-                title_elem = article.select_one('h2, h3')
-                if title_elem:
-                    title = title_elem.text.strip()
-                    link_elem = article.find('a')
-                    link = link_elem['href'] if link_elem and 'href' in link_elem.attrs else ''
-
-                    # Get article content
-                    if link:
-                        article_response = requests.get(link)
-                        article_soup = BeautifulSoup(article_response.text, 'lxml')
-                        content_elem = article_soup.select_one('div.detail-text')
-                        content = content_elem.get_text(strip=True) if content_elem else ''
-
-                        # Generate summary using Gemini AI
+            if news_data['status'] == 'ok':
+                for article in news_data['articles']:
+                    # Generate summary using Gemini AI if content is available
+                    content = article.get('description', '') or article.get('content', '')
+                    if content:
                         prompt = f"Buatkan ringkasan singkat dan informatif (maksimal 3 kalimat) dari berita berikut:\n\n{content}"
                         summary_response = model.generate_content(prompt)
                         summary = summary_response.text if summary_response else ''
                     else:
-                        content = ''
                         summary = ''
 
                     articles.append({
-                        'title': title,
-                        'link': link,
+                        'title': article.get('title', ''),
+                        'link': article.get('url', ''),
                         'summary': summary
                     })
 
-            cnn_cache = {'timestamp': current_time, 'data': articles}
+                news_cache = {'timestamp': current_time, 'data': articles}
 
         if articles:
-            news_text = '📰 Berita Terkini dari CNN Indonesia:\n\n'
+            news_text = '📰 Berita Terkini Indonesia:\n\n'
             for i, article in enumerate(articles, 1):
                 news_text += f"{i}. {article['title']}\n"
                 if article['summary']:
@@ -108,8 +100,8 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text('Mohon maaf, tidak ada berita yang dapat diambil saat ini.')
     except Exception as e:
-        logging.error(f"Error fetching CNN news: {str(e)}")
-        await update.message.reply_text('Mohon maaf, terjadi kesalahan saat mengambil berita dari CNN Indonesia.')
+        logging.error(f"Error fetching news: {str(e)}")
+        await update.message.reply_text('Mohon maaf, terjadi kesalahan saat mengambil berita.')
 
 async def get_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Get weather information from OpenWeatherMap."""
