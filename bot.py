@@ -19,7 +19,7 @@ logging.basicConfig(
 
 # Inisialisasi Gemini
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-model = genai.GenerativeModel('gemini-2.5-pro-preview-03-25')  # atau gemini-pro
+model = genai.GenerativeModel('gemini-2.0-flash')  # atau gemini-pro
 
 # API Keys
 WEATHER_API_KEY = os.getenv('WEATHER_API_KEY')
